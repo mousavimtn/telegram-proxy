@@ -1,0 +1,51 @@
+name: SOCKS5 Proxy for Telegram
+on:
+  workflow_dispatch:
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Install python-telegram-bot and cloudflared
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y python3-pip
+          pip install python-telegram-bot[socks] cloudflared
+
+      - name: Run SOCKS5 Proxy and expose via Cloudflare Tunnel
+        run: |
+          python3 -c "
+          import asyncio, socket, threading
+
+          async def handle_client(reader, writer):
+              try:
+                  remote_reader, remote_writer = await asyncio.open_connection('telegram.org', 443)
+                  async def forward(src, dst):
+                      try:
+                          while True:
+                              data = await src.read(4096)
+                              if not data: break
+                              dst.write(data)
+                              await dst.drain()
+                      except: pass
+                  await asyncio.gather(forward(reader, remote_writer), forward(remote_reader, writer))
+              except: pass
+
+          async def main():
+              server = await asyncio.start_server(handle_client, '0.0.0.0', 1080)
+              print('SOCKS5 Proxy running on port 1080')
+              async with server:
+                  await server.serve_forever()
+
+          asyncio.run(main())
+          " &
+
+          # Install and run cloudflared
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+          cloudflared tunnel --url tcp://localhost:1080 2>&1 | tee tunnel.log &
+          sleep 10
+          URL=$(grep -oP 'tcp://[^[:space:]]+\.trycloudflare\.com:\d+' tunnel.log | head -1)
+          echo "TUNNEL_URL=$URL" >> $GITHUB_ENV
+          echo "::notice::Tunnel URL: $URL"
+          sleep 21000
