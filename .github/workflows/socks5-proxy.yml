@@ -1,4 +1,4 @@
-name: HTTP Proxy with SNI Spoofing
+name: SOCKS5 Proxy with SNI Spoofing
 on:
   workflow_dispatch:
 jobs:
@@ -12,13 +12,51 @@ jobs:
           sudo apt-get install -y python3-pip
           pip install python-telegram-bot[socks]
 
-      - name: Run HTTP Proxy
+      - name: Run SOCKS5 Proxy
         run: |
           python3 -c "
           import asyncio
+          import socket
+          import struct
+
           async def handle_client(reader, writer):
               try:
-                  remote_reader, remote_writer = await asyncio.open_connection('telegram.org', 443)
+                  # SOCKS5 handshake
+                  data = await reader.read(2)
+                  if data[0] != 0x05:
+                      writer.close()
+                      return
+                  n_methods = data[1]
+                  await reader.read(n_methods)
+                  writer.write(b'\\x05\\x00')
+                  await writer.drain()
+
+                  data = await reader.read(4)
+                  if data[0] != 0x05 or data[1] != 0x01:
+                      writer.close()
+                      return
+
+                  addr_type = data[3]
+                  if addr_type == 1:  # IPv4
+                      addr = await reader.read(4)
+                      host = socket.inet_ntoa(addr)
+                  elif addr_type == 3:  # Domain
+                      length = (await reader.read(1))[0]
+                      host = (await reader.read(length)).decode()
+                  elif addr_type == 4:  # IPv6
+                      addr = await reader.read(16)
+                      host = socket.inet_ntop(socket.AF_INET6, addr)
+                  else:
+                      writer.close()
+                      return
+
+                  port_data = await reader.read(2)
+                  port = struct.unpack('!H', port_data)[0]
+
+                  writer.write(b'\\x05\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00')
+                  await writer.drain()
+
+                  remote_reader, remote_writer = await asyncio.open_connection(host, port)
                   async def forward(src, dst):
                       try:
                           while True:
@@ -29,9 +67,10 @@ jobs:
                       except: pass
                   await asyncio.gather(forward(reader, remote_writer), forward(remote_reader, writer))
               except: pass
+
           async def main():
               server = await asyncio.start_server(handle_client, '0.0.0.0', 1080)
-              print('HTTP Proxy running on port 1080')
+              print('SOCKS5 Proxy running on port 1080')
               async with server:
                   await server.serve_forever()
           asyncio.run(main())
@@ -42,11 +81,11 @@ jobs:
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
-      - name: Expose tunnel with SNI Spoofing
+      - name: Expose SOCKS5 via Cloudflare Tunnel with SNI github.com
         run: |
-          cloudflared tunnel --url http://localhost:1080 --origin-server-name github.com 2>&1 | tee tunnel.log &
+          cloudflared tunnel --url tcp://localhost:1080 --origin-server-name github.com 2>&1 | tee tunnel.log &
           sleep 10
-          URL=$(grep -oP 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' tunnel.log | head -1)
+          URL=$(grep -oP 'tcp://[a-zA-Z0-9.-]*\.trycloudflare\.com:\\d+' tunnel.log | head -1)
           echo "TUNNEL_URL=$URL" >> $GITHUB_ENV
           echo "::notice::Tunnel URL: $URL"
           echo "TUNNEL_SERVER_URL = $URL"
