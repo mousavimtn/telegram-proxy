@@ -12,7 +12,7 @@ jobs:
           sudo apt-get install -y python3-pip
           pip install python-telegram-bot[socks]
 
-      - name: Run SOCKS5 Proxy
+      - name: Run HTTP Proxy
         run: |
           python3 -c "
           import asyncio
@@ -31,7 +31,7 @@ jobs:
               except: pass
           async def main():
               server = await asyncio.start_server(handle_client, '0.0.0.0', 1080)
-              print('SOCKS5 Proxy running on port 1080')
+              print('HTTP Proxy running on port 1080')
               async with server:
                   await server.serve_forever()
           asyncio.run(main())
@@ -43,13 +43,13 @@ jobs:
           curl -L --output ngrok.tgz https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
           tar xvzf ngrok.tgz
 
-          # Add auth token and expose port 1080 via ngrok TCP
+          # Add auth token and expose port 1080 via ngrok HTTP
           ./ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-          ./ngrok tcp 1080 --log=stdout &
+          ./ngrok http 1080 --log=stdout &
           sleep 10
 
           # Get the tunnel URL from ngrok API
-          TUNNEL_URL=$(curl -s localhost:4040/api/tunnels | grep -o '"public_url":"tcp://[^"]*' | grep -o 'tcp://[^"]*')
+          TUNNEL_URL=$(curl -s localhost:4040/api/tunnels | grep -o '"public_url":"https://[^"]*' | grep -o 'https://[^"]*')
           echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
           echo "::notice::Tunnel URL: $TUNNEL_URL"
           sleep 21000
